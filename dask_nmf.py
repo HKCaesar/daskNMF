@@ -23,6 +23,34 @@ def initialize_da(X, k, init = 'random', W=None, H=None):
     if init == 'custom':
         return W, H
 
+    if init == 'random_vcol':
+
+        import math
+        #p_c = options.get('p_c', int(ceil(1. / 5 * X.shape[1])))
+        #p_r = options.get('p_r', int(ceil(1. / 5 * X.shape[0])))
+        p_c = int(math.ceil(1. / 5 * X.shape[1]))
+        p_r = int(math.ceil(1. / 5 * X.shape[0]))
+        prng = np.random.RandomState(42)
+
+
+        #W = da.zeros((X.shape[0], n_components), chunks = (X.shape[0],n_components))
+        #H = da.zeros((n_components, X.shape[1]), chunks = (n_components,X.chunks[1][0]))
+
+        W = []
+        H = []
+
+        for i in range(k):
+            W.append (X[:, prng.randint(low=0, high=X.shape[1], size=p_c)].mean(axis=1).compute())
+            H.append (X[prng.randint(low=0, high=X.shape[0], size=p_r), :].mean(axis=0).compute())
+        W = np.stack(W, axis=1)
+        H = np.stack(H, axis=0)
+
+
+
+        return W, H
+
+
+
 
 # random/NNDSVD/A initialization from sklearn
 def initialize(X, k, init, W=None, H=None):
@@ -101,6 +129,96 @@ def initialize(X, k, init, W=None, H=None):
         return W, H
 
 
+
+    if init == 'random_vcol':
+
+        import math
+        #p_c = options.get('p_c', int(ceil(1. / 5 * X.shape[1])))
+        #p_r = options.get('p_r', int(ceil(1. / 5 * X.shape[0])))
+        p_c = int(math.ceil(1. / 5 * X.shape[1]))
+        p_r = int(math.ceil(1. / 5 * X.shape[0]))
+        prng = np.random.RandomState(42)
+
+
+        W = np.mat(np.zeros((X.shape[0], k)))
+        H = np.mat(np.zeros((k, X.shape[1])))
+
+        for i in range(k):
+            W[:, i] = X[:, prng.randint(
+                    low=0, high=X.shape[1], size=p_c)].mean(axis=1)
+            H[i, :] = X[
+                    self.prng.randint(low=0, high=V.shape[0], size=p_r), :].mean(axis=0)
+
+        return W, H
+#-----------------------------------
+# Updates Dask
+#
+def update_H_da(M,H,W):
+    denominator = da.dot(W.T,da.dot(W,H))
+    denominator_new = da.where(da.fabs(denominator) < EPSILON,EPSILON,denominator)
+    H_new = H*da.dot(W.T,M)/denominator_new
+    return(H_new)
+
+
+def update_W_da(M,H,W):
+    denominator = da.dot(W,da.dot(H,H.T))
+    denominator_new = da.where(da.fabs(denominator) < EPSILON,EPSILON,denominator)
+    W_new = W*da.dot(M,H.T)/denominator_new
+    return(W_new)
+
+#-----------------------------------
+# Updates Numpy
+#
+
+
+def update_W(M,H,W):
+    denominator = (np.dot(W,np.dot(H,H.T)))
+    denominator[np.abs(denominator) < EPSILON] = EPSILON
+    W_new = W*np.dot(M,H.T)/denominator
+    return(W_new)
+
+def update_H(M,H,W):
+    denominator = (np.dot(W.T,np.dot(W,H)))
+    denominator[np.abs(denominator) < EPSILON] = EPSILON
+    H_new = H*np.dot(W.T,M)/denominator
+    return(H_new)
+
+#---------------------
+# fitting functions
+
+# numpy fitting function
+EPSILON = np.finfo(np.float32).eps
+def fit(M, k, nofit, init, W=None, H=None):
+
+    W, H = initialize(M, k, init, W, H)
+
+
+
+    err = []
+    for it in range(nofit):
+        W = update_W(M,H,W)
+        #print(np.sum(np.isnan(W)))
+        H = update_H(M,H,W)
+        err.append(linalg.norm(M - np.dot(W,H)))
+        if it%10==0:
+            print('Iteration '+str(it)+': error = '+ str(err[it]))
+    return(W, H, err)
+
+# dask fitting function
+def fit_da(M, k, nofit, init='random', W=None, H=None):
+
+    from dask import compute
+
+    W, H = initialize_da(M, k, init, W, H)
+
+    err = []
+    for it in range(nofit):
+        W = update_W_da(M,H,W)
+        H = update_H_da(M,H,W)
+
+        err.append(da.linalg.norm(M - da.dot(W,H)))
+
+    return(W,H,err)
 
 # loss
 def Frobenius_loss(M,H,W):
